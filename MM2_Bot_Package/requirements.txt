@@ -1,0 +1,9 @@
+# Python dependencies (requires Python 3.10+)
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+pywin32>=306
+numpy>=1.24.0
+pillow>=10.0.0
+colorama>=0.4.6
+keyboard>=0.13.5
+mss>=9.0.1

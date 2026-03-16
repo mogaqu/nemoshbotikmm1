@@ -1,0 +1,18 @@
+создание скриншотов/
+# Модели и веса
+weights/
+*.pt
+*.pth
+*.onnx
+*.bin
+*.onnx
+*.safetensors
+
+# Исполняемые файлы
+*.exe
+*.dll
+
+# Кэш и мусор
+__pycache__/
+*.pyc
+.DS_Store

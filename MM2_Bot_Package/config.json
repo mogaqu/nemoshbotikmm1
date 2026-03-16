@@ -1,0 +1,148 @@
+{
+    "general": {
+        "manual_stop_key": "i",
+        "collection_confirm_window": 0.9
+    },
+"weights": {
+        "candy": "weights/balls+coins.pt",
+        "player": null
+    },
+    "target_classes": {
+        "ball": 0,
+        "coins": 1
+    },
+    "pid_controller": {
+        "kp": 0.04,
+        "ki": 0.001,
+        "kd": 0.025,
+        "integral_limit": 150.0
+    },
+    "movement": {
+        "min_distance": 52,
+        "turn_threshold": 24,
+        "paste_delay": 0.22,
+        "approach_distance": 140,
+        "forward_min_step": 0.045,
+        "forward_max_step": 0.16,
+        "forward_error_decay": 1.25,
+        "forward_block_error": 0.58,
+        "strafe_deadzone": 0.18,
+        "strafe_scale": 0.1,
+        "turn_deadzone": 14,
+        "turn_strong_error": 0.42,
+        "turn_base": 0.038,
+        "turn_scale": 0.12,
+        "turn_max": 0.21,
+        "turn_focus_error": 0.18,
+        "turn_focus_distance": 180,
+        "aim_alpha": 0.32
+    },
+    "dynamic_turn": {
+        "enabled": true,
+        "speed_min": 0.035,
+        "speed_max": 0.18,
+        "aim_confirm_threshold": 3
+    },
+    "detection": {
+        "predict_size": 320,
+        "multi_scale_enabled": true,
+        "multi_scale_factor": 1.3,
+        "multi_scale_conf_shift": -0.05,
+        "multi_scale_conf_floor": 0.14,
+        "heavy_scan_imgsz": 640,
+        "heavy_scan_relief": 2,
+        "heavy_scan_interval": 4,
+        "heavy_conf_floor": 0.12,
+        "high_fps_predict_size": 256,
+        "high_accuracy_predict_size": 416,
+        "dynamic_predict_size": true,
+        "far_distance_threshold": 200
+    },
+    "preprocessing": {
+        "enabled": true,
+        "s_gain": 1.12,
+        "v_gain": 1.28
+    },
+    "navigation": {
+        "hardcore_aim_mode": true,
+        "aim_complete_threshold_px": 12,
+        "progress_gain_far": 12,
+        "progress_gain_close": 5
+    },
+    "search": {
+        "scan_duration": 0.8,
+        "move_duration": 0.4,
+        "sprint_duration": 0.2,
+        "patterns": [
+            "normal_scan",
+            "sprint_scan",
+            "zigzag_move",
+            "spiral_search",
+            "jump_scan"
+        ],
+        "aggressive_threshold": 15,
+        "very_aggressive_threshold": 25,
+        "long_search_threshold": 35.0,
+        "search_threshold": 8
+    },
+    "predator_mode": {
+        "ego_filter_zone": [0.38, 0.45, 0.62, 1.0],
+        "risk_factor_weight": 150.0,
+        "risk_distance_threshold": 250,
+        "player_conf_thres": 0.40,
+        "threat_confirmation_distance": 100,
+        "use_fp16": true,
+        "threat_cache_ttl": 2.0,
+        "player_detection_hunt_cutoff_dist": 150,
+        "player_conf_floor": 0.28,
+        "player_conf_decay": 0.12,
+        "player_conf_relax_time": 2.5,
+        "confidence_boost_duration": 1.5,
+        "confidence_boost_amount": 0.08,
+        "player_escape_distance": 250,
+        "player_escape_cooldown": 0.5,
+        "threat_timeout": 1.5
+    },
+    "performance": {
+        "frame_skip": 1,
+        "player_detection_skip": 4
+    },
+    "targeting": {
+        "y_axis_priority_weight": 2.5,
+        "target_switch_threshold": 0.35
+    },
+    "antistuck": {
+        "stuck_detection_threshold": 18,
+        "stuck_for_obstacle_avoidance_threshold": 10,
+        "jump_interval": 12,
+        "post_collect_frames": 8,
+        "retry_threshold": 5,
+        "stuck_threshold": 15,
+        "escape_cooldown": 3.5,
+        "escape_push_duration": 0.4
+    },
+    "memory": {
+        "retention": 2.2,
+        "min_conf": 0.18,
+        "revisit_cooldown": 0.6,
+        "deque_maxlen": 8
+    },
+    "confirmation": {
+        "timeout": 2.5,
+        "visibility_threshold": 45,
+        "max_frames": 15,
+        "missing_required": 3,
+        "failure_limit": 4,
+        "micro_push": 0.12,
+        "strafe_push": 0.10,
+        "turn_push": 0.08
+    },
+    "adaptive_confidence": {
+        "base_confidence": 0.25,
+        "confidence_range": 0.12,
+        "max_no_detect_frames": 20,
+        "intensity_modifier_aggressive": 0.03,
+        "intensity_modifier_heavy": 0.05,
+        "min_confidence": 0.12
+    }
+}

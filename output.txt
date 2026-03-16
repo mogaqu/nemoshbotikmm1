@@ -1,0 +1,2 @@
+Classes: {0: 'ball', 1: 'coins'}
+Number of classes: 2
