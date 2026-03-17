@@ -1,0 +1,13 @@
+# Coin Hunter Pro v2 — конфиг
+# Редактируйте значения и запускайте с --config config.yaml
+
+navigation:
+  aim_deadzone_px: 20      # мёртвая зона мыши (px)
+  collect_dist_px: 55      # дистанция сбора монетки (px)
+  mouse_sensitivity: 0.40  # чувствительность мыши (PID * sens = dx)
+  stuck_seconds: 5.0       # секунд без прогресса → escape
+
+detector:
+  min_box_px: 6            # минимальный размер bbox (px)
+  max_box_px: 160          # максимальный размер bbox (px)
+  confirm_frames: 2        # кадров подтверждения перед добавлением цели

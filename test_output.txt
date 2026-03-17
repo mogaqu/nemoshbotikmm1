@@ -1,8 +1,0 @@
-Config weights: weights/balls+coins.pt
-Target classes: {'ball': 0, 'coins': 1}
-Model classes: {0: 'ball', 1: 'coins'}
-Detection test completed!
-Configured target classes: {'ball': 0, 'coins': 1}
-Model supports classes: {0: 'ball', 1: 'coins'}
-  OK ball (class 0): ball
-  OK coins (class 1): coins
