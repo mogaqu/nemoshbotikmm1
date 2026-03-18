@@ -1,9 +1,25 @@
 # Python dependencies (requires Python 3.10+)
-ultralytics>=8.0.0
+# All core dependencies are Apache 2.0 licensed
+
+# RT-DETR inference (Apache 2.0)
+transformers>=4.40.0
+torch>=2.1.0
+torchvision>=0.16.0
+
+# ByteTrack tracker (Apache 2.0)
+supervision>=0.20.0
+
+# Vision / capture
 opencv-python>=4.8.0
-pywin32>=306
-numpy>=1.24.0
 pillow>=10.0.0
-colorama>=0.4.6
-keyboard>=0.13.5
+numpy>=1.24.0
 mss>=9.0.1
+
+# Windows API / UI
+pywin32>=306
+keyboard>=0.13.5
+
+# Utilities
+colorama>=0.4.6
+pyyaml>=6.0
+scipy>=1.11.0

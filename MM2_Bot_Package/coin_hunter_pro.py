@@ -7,13 +7,13 @@
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 ЗАВИСИМОСТИ (установи через pip):
-    pip install ultralytics mss numpy opencv-python pywin32 keyboard colorama pyyaml scipy
+    pip install transformers torch torchvision supervision mss numpy opencv-python pywin32 keyboard colorama pyyaml scipy
     pip install dxcam  # опционально, для Win11/HDR-мониторов (+30% FPS)
 
 ЗАПУСК:
-    python coin_hunter_pro.py --weights weights/balls+coins.pt
-    python coin_hunter_pro.py --weights weights/balls+coins.pt --show --fps-limit 60
-    python coin_hunter_pro.py --weights weights/balls+coins.pt --config config.yaml
+    python coin_hunter_pro.py --weights PekingU/rtdetr_r50vd
+    python coin_hunter_pro.py --weights PekingU/rtdetr_r50vd --show --fps-limit 60
+    python coin_hunter_pro.py --weights PekingU/rtdetr_r50vd --config config.yaml
 
 УПРАВЛЕНИЕ:
     Q или ESC  →  аварийная остановка
@@ -53,8 +53,11 @@ except Exception:
     AHK_AVAILABLE = False
     print("[WARN] AHK недоступен — будет использован win32api для клавиш")
 
-# YOLOv8 / ultralytics
-from ultralytics import YOLO
+# RT-DETR (Apache 2.0) — HuggingFace Transformers + Supervision ByteTrack
+import torch
+from PIL import Image as _PILImage
+from transformers import RTDetrForObjectDetection, RTDetrImageProcessor
+import supervision as sv
 
 try:
     from colorama import Fore, Style, init as colorama_init
@@ -410,10 +413,11 @@ class ScreenCapture:
 
     Автоматически находит окно Roblox и определяет на каком мониторе оно.
     """
-    def __init__(self, use_dxcam: bool = True):
+    def __init__(self, use_dxcam: bool = True, window_name: str = 'Roblox'):
         self._use_dxcam = use_dxcam and DXCAM_AVAILABLE
         self._camera = None
-        self.region  = self._find_roblox_window()
+        self._window_name = window_name
+        self.region  = self._find_window()
 
         if self._use_dxcam:
             try:
@@ -437,13 +441,13 @@ class ScreenCapture:
             print("[CAPTURE] mss (BitBlt) активен ✓")
             log.info("ScreenCapture: mss активен")
 
-    def _find_roblox_window(self) -> dict:
+    def _find_window(self) -> dict:
         try:
             import win32gui
             windows = []
             def cb(hwnd, _):
                 if win32gui.IsWindowVisible(hwnd):
-                    if 'Roblox' in win32gui.GetWindowText(hwnd):
+                    if self._window_name.lower() in win32gui.GetWindowText(hwnd).lower():
                         windows.append(hwnd)
             win32gui.EnumWindows(cb, None)
             if windows:
@@ -460,16 +464,16 @@ class ScreenCapture:
                                 monitor_idx = i
                                 break
                 region = {'top': y + 30, 'left': x, 'width': w, 'height': h - 30}
-                print(f"[CAPTURE] Roblox: {w}×{h} @ ({x},{y}), монитор #{monitor_idx}")
-                log.info(f"Roblox window: {w}x{h} @ ({x},{y}), monitor #{monitor_idx}")
+                print(f"[CAPTURE] {self._window_name}: {w}×{h} @ ({x},{y}), монитор #{monitor_idx}")
+                log.info(f"Window {self._window_name}: {w}x{h} @ ({x},{y}), monitor #{monitor_idx}")
                 return region
         except Exception as e:
-            log.warning(f"_find_roblox_window: {e}")
+            log.warning(f"_find_window: {e}")
         # Весь первый монитор как fallback
         if MSS_AVAILABLE:
             with _mss.mss() as sct:
                 mon = sct.monitors[1]
-                print(f"[CAPTURE] Roblox не найден — весь экран {mon['width']}×{mon['height']}")
+                print(f"[CAPTURE] {self._window_name} не найден — весь экран {mon['width']}×{mon['height']}")
                 return {'top': mon['top'], 'left': mon['left'],
                         'width': mon['width'], 'height': mon['height']}
         return {'top': 0, 'left': 0, 'width': 1920, 'height': 1080}
@@ -527,18 +531,18 @@ class CoinHeatmap:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  СЕКЦИЯ 6 — Детектор YOLOv8 + ByteTrack + Ghost tracking
+#  СЕКЦИЯ 6 — Детектор RT-DETR + ByteTrack + Ghost tracking  (Apache 2.0)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class CoinDetector:
     """
-    YOLOv8 с ByteTrack и Ghost Tracking.
+    RT-DETR (Apache 2.0) с ByteTrack (supervision, Apache 2.0) и Ghost Tracking.
 
     Ghost Tracking: если монетка исчезла на <0.5с (окклюзия) — сохраняем
     последние координаты как «призрак» и продолжаем наводиться на него.
     Это предотвращает смену ID и дёрганье бота при кратковременных потерях.
 
-    Адаптивный порог conf: если YOLO видит >8 объектов — вероятно ложные
+    Адаптивный порог conf: если RT-DETR видит >8 объектов — вероятно ложные
     срабатывания, повышаем порог. Если <2 — снижаем.
     """
     MIN_BOX_PX     = 6
@@ -553,9 +557,15 @@ class CoinDetector:
 
     def __init__(self, weights: str, conf: float = 0.25, imgsz: int = 320,
                  coin_class_id: int = 1):
-        print(f"[YOLO] Загрузка модели: {weights}")
+        print(f"[RT-DETR] Загрузка модели: {weights}")
         log.info(f"CoinDetector init: {weights}, conf={conf}, imgsz={imgsz}")
-        self.model          = YOLO(weights)
+        # Normalize local path - remove './' prefix to avoid HuggingFace treating it as repo ID
+        if weights.startswith('./'):
+            weights = weights[2:]
+        self.device         = "cuda" if torch.cuda.is_available() else "cpu"
+        self.processor      = RTDetrImageProcessor.from_pretrained(weights)
+        self.model          = RTDetrForObjectDetection.from_pretrained(weights).to(self.device)
+        self.model.eval()
         self.conf_min       = conf
         self.conf_adaptive  = conf
         self.imgsz          = imgsz
@@ -567,11 +577,45 @@ class CoinDetector:
         self._false_positive_count = 0
         # Тепловая карта
         self.heatmap = CoinHeatmap()
+        # ByteTrack через supervision (Apache 2.0)
+        self._tracker = sv.ByteTracker()
+        self._next_id = 0
         # JIT-прогрев
         dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
-        self.model.predict(dummy, conf=conf, imgsz=imgsz, verbose=False)
-        print("[YOLO] Модель готова ✓")
-        log.info("YOLO model ready")
+        self._run_inference(dummy)
+        print("[RT-DETR] Модель готова ✓")
+        log.info("RT-DETR model ready")
+
+    def _run_inference(self, frame: np.ndarray):
+        """Запускает RT-DETR инференс, возвращает supervision Detections."""
+        h, w = frame.shape[:2]
+        pil_img = _PILImage.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        inputs = self.processor(images=pil_img, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+        # post_process возвращает список [{scores, labels, boxes}]
+        target_sizes = torch.tensor([[h, w]], device=self.device)
+        results = self.processor.post_process_object_detection(
+            outputs, threshold=self.conf_adaptive, target_sizes=target_sizes
+        )[0]
+        scores = results["scores"].cpu().numpy()
+        labels = results["labels"].cpu().numpy()
+        boxes  = results["boxes"].cpu().numpy()   # xyxy
+
+        # Фильтруем по классу
+        mask = labels == self.coin_class_id
+        scores = scores[mask]
+        boxes  = boxes[mask]
+
+        if len(boxes) == 0:
+            return sv.Detections.empty()
+
+        sv_dets = sv.Detections(
+            xyxy=boxes,
+            confidence=scores,
+            class_id=np.full(len(boxes), self.coin_class_id, dtype=int),
+        )
+        return sv_dets
 
     def _is_valid_coin(self, cx: float, cy: float, w: float, h: float,
                        fw: int, fh: int) -> bool:
@@ -589,58 +633,53 @@ class CoinDetector:
 
     def detect(self, frame: np.ndarray) -> list:
         """
-        Запускает детекцию+трекинг с ghost tracking и адаптивным conf.
+        Запускает детекцию+трекинг RT-DETR с ghost tracking и адаптивным conf.
         Возвращает список словарей: id, cx, cy, w, h, conf, dist, ghost
         """
         try:
             fh, fw = frame.shape[:2]
             cx_sc, cy_sc = fw / 2, fh / 2
-            results = self.model.track(
-                frame,
-                conf      = self.conf_adaptive,
-                imgsz     = self.imgsz,
-                persist   = True,
-                tracker   = 'bytetrack.yaml',
-                verbose   = False,
-                classes   = [self.coin_class_id],
-            )
+
+            sv_dets = self._run_inference(frame)
+            # ByteTrack через supervision
+            tracked = self._tracker.update_with_detections(sv_dets)
 
             seen_ids: set = set()
             coins: list   = []
             now = time.time()
 
-            if results and results[0].boxes is not None:
-                for box in results[0].boxes:
-                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                    bw   = x2 - x1
-                    bh   = y2 - y1
-                    bcx  = (x1 + x2) / 2
-                    bcy  = (y1 + y2) / 2
-                    tid  = int(box.id[0]) if box.id is not None else -1
+            for i in range(len(tracked)):
+                x1, y1, x2, y2 = tracked.xyxy[i]
+                bw   = x2 - x1
+                bh   = y2 - y1
+                bcx  = (x1 + x2) / 2
+                bcy  = (y1 + y2) / 2
+                tid  = int(tracked.tracker_id[i]) if tracked.tracker_id is not None else -1
+                conf_val = float(tracked.confidence[i]) if tracked.confidence is not None else self.conf_adaptive
 
-                    if not self._is_valid_coin(bcx, bcy, bw, bh, fw, fh):
-                        self._confirm.pop(tid, None)
-                        continue
+                if not self._is_valid_coin(bcx, bcy, bw, bh, fw, fh):
+                    self._confirm.pop(tid, None)
+                    continue
 
-                    seen_ids.add(tid)
-                    count = self._confirm.get(tid, 0) + 1
-                    self._confirm[tid] = count
-                    if count < self.CONFIRM_FRAMES:
-                        continue
+                seen_ids.add(tid)
+                count = self._confirm.get(tid, 0) + 1
+                self._confirm[tid] = count
+                if count < self.CONFIRM_FRAMES:
+                    continue
 
-                    coins.append({
-                        'id':    tid,
-                        'cx':    bcx,
-                        'cy':    bcy,
-                        'w':     bw,
-                        'h':     bh,
-                        'conf':  float(box.conf[0]),
-                        'dist':  math.hypot(bcx - cx_sc, bcy - cy_sc),
-                        'frames': count,
-                        'ghost': False,
-                    })
-                    # Обновляем тепловую карту
-                    self.heatmap.record(bcx, bcy, fw, fh)
+                coins.append({
+                    'id':    tid,
+                    'cx':    bcx,
+                    'cy':    bcy,
+                    'w':     bw,
+                    'h':     bh,
+                    'conf':  conf_val,
+                    'dist':  math.hypot(bcx - cx_sc, bcy - cy_sc),
+                    'frames': count,
+                    'ghost': False,
+                })
+                # Обновляем тепловую карту
+                self.heatmap.record(bcx, bcy, fw, fh)
 
             # ── Адаптивный confidence ──────────────────────────────────────
             if len(coins) > 8:
@@ -697,7 +736,7 @@ class CoinDetector:
         - вертикального положения (ближе к игроку = ниже)
         - бокового отклонения (монетка прямо перед игроком важнее)
         - числа кадров подтверждения
-        - уверенности YOLO
+        - уверенности RT-DETR
         - призраки имеют штраф
         """
         if not coins:
@@ -1105,7 +1144,7 @@ def auto_restart_watcher(interval: float = 10.0):
 
 class ParallelPipeline:
     """
-    Разделяет захват кадра и инференс YOLO на два потока.
+    Разделяет захват кадра и инференс RT-DETR на два потока.
     GPU (инференс) и CPU (захват+навигация) работают параллельно → +20–40% FPS.
     """
     def __init__(self, screen: ScreenCapture, detector: CoinDetector):
@@ -1184,20 +1223,21 @@ def apply_config(cfg: dict, nav: NavigationPro, detector: CoinDetector):
 
 def run_bot(weights: str, conf: float, imgsz: int, coin_class: int,
             show_cv: bool, fps_limit: int, config_path: str,
-            use_dxcam: bool, parallel: bool):
+            use_dxcam: bool, parallel: bool, window_name: str = 'Roblox'):
     """Точка входа — инициализация и главный loop."""
 
     print(f"\n{Fore.CYAN}{'═'*62}")
     print("  COIN HUNTER PRO v2 — старт")
     print(f"  Модель:  {weights}")
     print(f"  Порог:   {conf}  |  imgsz: {imgsz}")
+    print(f"  Окно:    {window_name}")
     print(f"  Захват:  {'dxcam' if (use_dxcam and DXCAM_AVAILABLE) else 'mss'}")
     print(f"  Pipeline: {'параллельный' if parallel else 'последовательный'}")
     print(f"  Лог:     {_log_filename}")
     print(f"  Стоп:    Q или ESC")
     print(f"{'═'*62}{Style.RESET_ALL}\n")
 
-    log.info(f"Bot started: weights={weights}, conf={conf}, imgsz={imgsz}")
+    log.info(f"Bot started: weights={weights}, conf={conf}, imgsz={imgsz}, window={window_name}")
 
     keyboard.add_hotkey('q',   lambda: STOP.set())
     keyboard.add_hotkey('esc', lambda: STOP.set())
@@ -1205,7 +1245,7 @@ def run_bot(weights: str, conf: float, imgsz: int, coin_class: int,
     watcher = threading.Thread(target=auto_restart_watcher, daemon=True)
     watcher.start()
 
-    screen   = ScreenCapture(use_dxcam=use_dxcam)
+    screen   = ScreenCapture(use_dxcam=use_dxcam, window_name=window_name)
     detector = CoinDetector(weights, conf=conf, imgsz=imgsz, coin_class_id=coin_class)
     keys     = KeyController()
     nav      = NavigationPro(keys)
@@ -1250,7 +1290,7 @@ def run_bot(weights: str, conf: float, imgsz: int, coin_class: int,
                 with timer("Capture"):
                     frame = screen.grab()
                 fh, fw = frame.shape[:2]
-                with timer("YOLO"):
+                with timer("RT-DETR"):
                     coins = detector.detect(frame)
 
             target = detector.pick_nearest(coins, fw=fw)
@@ -1321,12 +1361,12 @@ if __name__ == '__main__':
   python coin_hunter_pro.py --weights weights/balls+coins.pt --config config.yaml
         """
     )
-    parser.add_argument('--weights',    default='weights/balls+coins.pt',
-                        help='Путь к .pt (YOLOv8)')
+    parser.add_argument('--weights',    default='PekingU/rtdetr_r50vd',
+                        help='HuggingFace model id или локальный путь (RT-DETR, Apache 2.0)')
     parser.add_argument('--conf',       type=float, default=0.25,
-                        help='Порог уверенности YOLO')
-    parser.add_argument('--imgsz',      type=int,   default=320,
-                        help='Размер входа YOLO (320 быстро, 640 точно)')
+                        help='Порог уверенности RT-DETR')
+    parser.add_argument('--imgsz',      type=int,   default=640,
+                        help='Размер входа RT-DETR (640 стандарт)')
     parser.add_argument('--coin-class', type=int,   default=1,
                         help='ID класса монетки в модели')
     parser.add_argument('--show',       action='store_true',
@@ -1335,8 +1375,10 @@ if __name__ == '__main__':
                         help='Максимальный FPS бота (0 = без ограничений)')
     parser.add_argument('--config',     default='',
                         help='Путь к YAML-конфигу (опционально)')
+    parser.add_argument('--window',     default='Roblox',
+                        help='Название окна для захвата (по умолчанию: Roblox)')
     parser.add_argument('--dxcam',      action='store_true',
-                        help='Использовать dxcam вместо mss (Win11/HDR, +30% FPS)')
+                        help='Использовать dxcam вместо mss (Win11/HDR, +30%% FPS)')
     parser.add_argument('--parallel',   action='store_true',
                         help='Параллельный захват+инференс (GPU+CPU одновременно)')
     args = parser.parse_args()
@@ -1351,12 +1393,13 @@ if __name__ == '__main__':
         config_path = args.config,
         use_dxcam   = args.dxcam,
         parallel    = args.parallel,
+        window_name = args.window,
     )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  РАЗДЕЛ: КАК ЭТО ПЕРЕНЕСТИ В РЕАЛЬНУЮ РОБОТОТЕХНИКУ
-#  (Raspberry Pi 5 / Arduino + камера + YOLO + PID для моторов)
+#  (Raspberry Pi 5 / Arduino + камера + RT-DETR + PID для моторов)
 # ══════════════════════════════════════════════════════════════════════════════
 """
 ═══════════════════════════════════════════════════════════════════════════════
@@ -1375,12 +1418,13 @@ Roblox:   frame = screen.grab()              # mss/dxcam с экрана
     frame = cam.capture_array()              # RGBA → конвертируй в BGR
 
 
-2. ДЕТЕКЦИЯ  (YOLOv8 — идентичен на ПК и Pi)
-──────────────────────────────────────────────
-  model = YOLO('coin_nano.pt')               # nano ≈ 1MB, быстрее на Pi
-  # Для Pi 5: экспортируй в NCNN (~3× быстрее)
-  model.export(format='ncnn')
-  model = YOLO('coin_nano_ncnn_model')
+2. ДЕТЕКЦИЯ  (RT-DETR Apache 2.0 — идентичен на ПК и Pi)
+──────────────────────────────────────────────────────────
+  from transformers import RTDetrForObjectDetection, RTDetrImageProcessor
+  processor = RTDetrImageProcessor.from_pretrained('PekingU/rtdetr_r18vd')  # лёгкая для Pi
+  model = RTDetrForObjectDetection.from_pretrained('PekingU/rtdetr_r18vd')
+  # Для Pi 5: экспортируй в ONNX (~2× быстрее)
+  # model.save_pretrained('rtdetr_r18vd_local')
 
 
 3. PID ДЛЯ МОТОРОВ  (аналог smooth_mouse_move)
@@ -1443,7 +1487,7 @@ Roblox:   smooth_mouse_move(pid_out)         # поворот камеры
   │ Задача             │ Roblox-бот          │ Реальный робот        │
   ├────────────────────┼─────────────────────┼───────────────────────┤
   │ Камера/кадр        │ mss/dxcam           │ cv2.VideoCapture      │
-  │ Детекция           │ YOLO.track()        │ YOLO.track() (то же!) │
+  │ Детекция           │ RT-DETR+ByteTrack   │ RT-DETR+ByteTrack (то же!) │
   │ Ошибка→сигнал      │ PID → mouse_event   │ PID → motor PWM       │
   │ Движение вперёд    │ KeyController W     │ GPIO PWM / Serial     │
   │ Поиск              │ RandomWalker        │ random drive loop     │
