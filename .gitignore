@@ -6,7 +6,6 @@ weights/
 *.onnx
 *.bin
 *.onnx
-*.safetensors
 
 # Исполняемые файлы
 *.exe
